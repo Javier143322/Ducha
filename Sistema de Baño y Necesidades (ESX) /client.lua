@@ -1,6 +1,6 @@
 -- ================================================================= --
 --                             CLIENT.LUA                            --
---         LÓGICA DEL LADO DEL CLIENTE (Detección, Animaciones, Sonidos) --
+--         LÓGICA DEL LADO DEL CLIENTE (Detección, Animaciones, Sonidos, PTFX) --
 -- ================================================================= --
 
 local ESX = nil
@@ -8,6 +8,30 @@ local PlayerData = {}
 local isNearObject = false 
 local currentZone = nil     
 local ActionTimestamps = {} 
+local isActionInProgress = false -- Bloqueo de acciones
+local ptfxHandle = 0             -- Handle para la partícula de PTFX
+
+-- [[ FUNCIONES DE DIBUJO 3D ]] -----------------------------------------
+
+function DrawText3D(x, y, z, text)
+    local onScreen, _x, _y = World3dToScreen2d(x, y, z)
+    local dist = GetDistanceBetweenCoords(GetGameplayCamCoords(), x, y, z, 1)
+    local scale = 1 / dist * 2
+    local fov = (1 / GetGameplayCamFov()) * 10
+    local scale = scale * fov
+    
+    if onScreen then
+        SetTextScale(0.0, scale)
+        SetTextFont(4)
+        SetTextProportional(1)
+        SetTextColour(255, 255, 255, 255)
+        SetTextOutline()
+        SetTextEntry("STRING")
+        SetTextCentre(1)
+        AddTextComponentString(text)
+        DrawText(_x, _y)
+    end
+end
 
 -- [[ 1. INICIALIZACIÓN Y ESX ]] ----------------------------------------
 Citizen.CreateThread(function()
@@ -23,7 +47,7 @@ Citizen.CreateThread(function()
 end)
 
 
--- [[ 2. BUCLE DE DETECCIÓN DE ZONA ]] ----------------------------------
+-- [[ 2. BUCLE DE DETECCIÓN Y DIBUJO 3D ]] ----------------------------------
 Citizen.CreateThread(function()
     while true do
         Citizen.Wait(0) 
@@ -43,14 +67,20 @@ Citizen.CreateThread(function()
             end
         end
 
-        if closestZone ~= nil then
+        if closestZone ~= nil and not isActionInProgress then
+            local actionConfig = Config.Actions[closestZone.type]
+            
+            -- DIBUJAR TEXTO 3D
+            DrawText3D(closestZone.coords.x, closestZone.coords.y, closestZone.coords.z + 1.0, 
+                string.format("~b~[%s]~w~ %s", GetKeyName(Config.InteractKey), actionConfig.text))
+
             if not isNearObject then
-                ESX.ShowHelpNotification(string.format(_U('press_key_to_interact'), Config.InteractKey))
                 isNearObject = true
                 currentZone = closestZone
             end
 
-            if IsControlJustReleased(0, 38) and not IsPedInAnyVehicle(playerPed, false) and not ESX.UI.Menu.IsOpen('default', GetCurrentResourceName(), 'bathroom_interaction_menu') then 
+            -- Manejar la interacción (Tecla 'E')
+            if IsControlJustReleased(0, Config.InteractKey) and not IsPedInAnyVehicle(playerPed, false) and not ESX.UI.Menu.IsOpen('default', GetCurrentResourceName(), 'bathroom_interaction_menu') then 
                 if not IsActionOnCooldown(currentZone.type) then
                     TriggerEvent('esx_bathroom:openMenu', currentZone)
                 else
@@ -59,7 +89,6 @@ Citizen.CreateThread(function()
             end
         else
             if isNearObject then
-                ESX.HideHelpNotification() 
                 isNearObject = false
                 currentZone = nil
             end
@@ -69,7 +98,7 @@ Citizen.CreateThread(function()
 end)
 
 
--- [[ 3. LÓGICA DE MENÚ (Menú Interactivo de ESX) ]] ---------------------
+-- [[ 3. LÓGICA DE MENÚ ]] -------------------------------------
 
 RegisterNetEvent('esx_bathroom:openMenu')
 AddEventHandler('esx_bathroom:openMenu', function(zoneData)
@@ -101,23 +130,40 @@ AddEventHandler('esx_bathroom:openMenu', function(zoneData)
 end)
 
 
--- [[ 4. LÓGICA DE LA ACCIÓN (Animaciones y Sonidos) ]] ----------------------------
+-- [[ 4. LÓGICA DE LA ACCIÓN (Animaciones, Sonidos y PTFX) ]] ----------------------------
 
 RegisterNetEvent('esx_bathroom:startAction')
 AddEventHandler('esx_bathroom:startAction', function(actionType, coords, heading)
     local actionConfig = Config.Actions[actionType]
     local playerPed = PlayerPedId()
+    
+    isActionInProgress = true
 
-    -- Congelar/Bloquear al jugador
+    -- Congelar/Bloquear al jugador y posicionar
     SetEntityCoords(playerPed, coords.x, coords.y, coords.z)
     SetEntityHeading(playerPed, heading)
     FreezeEntityPosition(playerPed, true)
     
     -- Iniciar Sonido
-    if actionConfig.sound then
-        PlaySoundFrontend(-1, actionConfig.sound.name, actionConfig.sound.set, true)
+    if actionConfig.sound and actionConfig.sound.startName then
+        PlaySoundFrontend(-1, actionConfig.sound.startName, actionConfig.sound.startSet, true)
     end
     
+    -- Iniciar Partícula (PTFX)
+    if actionConfig.ptfx then
+        ESX.Streaming.RequestPtfxAsset(actionConfig.ptfx.dict, function()
+            local boneIndex = GetEntityBoneIndexByName(playerPed, 'skel_head') -- Se puede usar un hueso o la posición
+            ptfxHandle = StartParticleFxLoopedAtCoord(
+                actionConfig.ptfx.name, 
+                coords.x + actionConfig.ptfx.offset.x, 
+                coords.y + actionConfig.ptfx.offset.y, 
+                coords.z + actionConfig.ptfx.offset.z, 
+                0.0, 0.0, 0.0, 
+                1.0, false, false, false, false
+            )
+        end)
+    end
+
     -- Lógica de las Animaciones
     if actionConfig.scenario then
         TaskStartScenarioInPlace(playerPed, actionConfig.scenario, 0, true)
@@ -130,16 +176,23 @@ AddEventHandler('esx_bathroom:startAction', function(actionType, coords, heading
     -- Esperar la duración de la acción
     Citizen.Wait(actionConfig.duration)
 
-    -- Detener Sonido (solo si el sonido no es de evento único como el 'flush')
-    if actionConfig.sound and (actionType == 'shower' or actionType == 'sink') then
-        -- No hay una función nativa de 'StopSoundFrontend', se asume que el sonido es corto o lo gestiona GTA.
-        -- Para sonidos largos como la ducha, el sonido se detendrá al dejar de ejecutar la animación.
+    -- Detener Partícula (PTFX)
+    if ptfxHandle ~= 0 then
+        StopParticleFxLooped(ptfxHandle, 0)
+        ptfxHandle = 0
+    end
+    
+    -- Detener Sonido de Cierre
+    if actionConfig.sound and actionConfig.sound.stopName then
+        PlaySoundFrontend(-1, actionConfig.sound.stopName, actionConfig.sound.stopSet, true)
     end
     
     -- Finalizar la animación/escenario y descongelar
     ClearPedTasksImmediately(playerPed)
     FreezeEntityPosition(playerPed, false)
 
+    isActionInProgress = false
+    
     -- Disparar los efectos al servidor.
     TriggerServerEvent('esx_bathroom:finishAction', actionType)
 end)
@@ -169,9 +222,12 @@ end)
 
 
 -- [[ 6. LOCALIZACIÓN/TEXTOS ]] ------------------------------------------
+-- Función GetKeyName para obtener el nombre legible de la tecla (para DrawText3D)
+function GetKeyName(control)
+    return GetControlInstructionalButton(2, control, true)
+end
 
 local Translations = {
-    ['press_key_to_interact'] = 'Pulsa [ %s ] para interactuar con la zona.',
     ['wait_cooldown']         = 'Debes esperar un poco antes de volver a usar esto.' 
 }
 
