@@ -7,6 +7,7 @@ local ESX = nil
 local PlayerData = {}
 local isNearObject = false -- Bandera para saber si ya estamos en un rango de interacción
 local currentZone = nil     -- Almacena la zona activa (para el menú y la interacción)
+local ActionTimestamps = {} -- { type = timestamp_fin } para cooldown en cliente
 
 -- [[ 1. INICIALIZACIÓN Y ESX ]] ----------------------------------------
 Citizen.CreateThread(function()
@@ -54,8 +55,13 @@ Citizen.CreateThread(function()
             end
 
             -- Manejar la interacción (Tecla 'E' por defecto)
-            if IsControlJustReleased(0, 38) and not IsPedInAnyVehicle(playerPed, false) then -- 38 es la tecla 'E'
-                TriggerEvent('esx_bathroom:openMenu', currentZone)
+            -- Se añade la verificación de menú abierto y cooldown antes de disparar el evento
+            if IsControlJustReleased(0, 38) and not IsPedInAnyVehicle(playerPed, false) and not ESX.UI.Menu.IsOpen('default', GetCurrentResourceName(), 'bathroom_interaction_menu') then -- 38 es la tecla 'E'
+                if not IsActionOnCooldown(currentZone.type) then
+                    TriggerEvent('esx_bathroom:openMenu', currentZone)
+                else
+                    ESX.ShowNotification(_U('wait_cooldown'))
+                end
             end
 
             -- Si no estamos cerca de NADA:
@@ -72,31 +78,40 @@ Citizen.CreateThread(function()
 end)
 
 
--- [[ 3. LÓGICA DE MENÚ (Por implementar) ]] -----------------------------
+-- [[ 3. LÓGICA DE MENÚ (Menú Interactivo de ESX) ]] ---------------------
 
 RegisterNetEvent('esx_bathroom:openMenu')
 AddEventHandler('esx_bathroom:openMenu', function(zoneData)
-    -- Lógica temporal del menú: Simplemente llamaremos a la acción inmediatamente.
-    -- En la Fase 2, aquí se abriría un menú de opciones (Ej: "¿Ducharse?" o "Abrir Grifo").
     
-    if zoneData.type == 'urinal' then
-        ESX.ShowNotification('Has decidido usar el orinal. ¡Rápido!')
-        TriggerEvent('esx_bathroom:startAction', zoneData.type, zoneData.coords, zoneData.heading)
+    local elements = {}
+    local actionConfig = Config.Actions[zoneData.type]
 
-    elseif zoneData.type == 'toilet' then
-        ESX.ShowNotification('Te sientas en el inodoro. Esto tomará un momento...')
-        TriggerEvent('esx_bathroom:startAction', zoneData.type, zoneData.coords, zoneData.heading)
+    -- Solo debe haber una opción en la mayoría de los casos (ducha, inodoro, etc.)
+    table.insert(elements, {
+        label = actionConfig.text, 
+        value = zoneData.type      
+    })
 
-    elseif zoneData.type == 'shower' then
-        ESX.ShowNotification('¡Hora de una ducha refrescante!')
-        TriggerEvent('esx_bathroom:startAction', zoneData.type, zoneData.coords, zoneData.heading)
+    ESX.UI.Menu.CloseAll()
 
-    elseif zoneData.type == 'sink' then
-        ESX.ShowNotification('Te lavas las manos. ¡Qué limpio!')
-        TriggerEvent('esx_bathroom:startAction', zoneData.type, zoneData.coords, zoneData.heading)
-
-    end
-
+    ESX.UI.Menu.Open(
+        'default', GetCurrentResourceName(), 'bathroom_interaction_menu',
+        {
+            title    = string.upper(zoneData.type), -- Título: TOILET, SHOWER, SINK
+            elements = elements,
+        },
+        function(data, menu)
+            -- Cuando el jugador selecciona la acción
+            menu.close()
+            
+            -- Disparar la acción con las coordenadas y heading de la zona
+            TriggerEvent('esx_bathroom:startAction', data.current.value, zoneData.coords, zoneData.heading)
+        end,
+        function(data, menu)
+            -- Al cerrar el menú
+            menu.close()
+        end
+    )
 end)
 
 
@@ -131,20 +146,45 @@ AddEventHandler('esx_bathroom:startAction', function(actionType, coords, heading
     ClearPedTasksImmediately(playerPed)
     FreezeEntityPosition(playerPed, false)
 
-    -- ** NOTA IMPORTANTE: **
-    -- Los efectos reales (limpieza, reducción de hambre/sed)
-    -- se dispararán ahora al servidor.
+    -- Disparar los efectos al servidor.
     TriggerServerEvent('esx_bathroom:finishAction', actionType)
 end)
 
 
--- [[ 5. LOCALIZACIÓN/TEXTOS (Mínimo requerido para funcionar) ]] --------
--- Necesario para que la notificación de ayuda se muestre correctamente.
+-- [[ 5. GESTIÓN DE COOLDOWNS (Lado Cliente) ]] --------------------------
+
+-- Recibe la señal del servidor para establecer el cooldown
+RegisterNetEvent('esx_bathroom:setCooldownClient')
+AddEventHandler('esx_bathroom:setCooldownClient', function(actionType, cooldownEndTimestamp)
+    ActionTimestamps[actionType] = cooldownEndTimestamp
+end)
+
+-- Comprueba si la acción está en cooldown
+function IsActionOnCooldown(actionType)
+    local endTimestamp = ActionTimestamps[actionType]
+    if endTimestamp then
+        local now = GetGameTimer()
+        return now < endTimestamp
+    end
+    return false
+end
+
+-- Limpiar el timestamp cuando el jugador se desconecta (aunque el servidor ya lo hace)
+AddEventHandler('onResourceStop', function(resourceName)
+    if resourceName == GetCurrentResourceName() then
+        ActionTimestamps = {}
+    end
+end)
+
+
+-- [[ 6. LOCALIZACIÓN/TEXTOS ]] ------------------------------------------
+
 local Translations = {
-    ['press_key_to_interact'] = 'Pulsa [ %s ] para interactuar con la zona.'
+    ['press_key_to_interact'] = 'Pulsa [ %s ] para interactuar con la zona.',
+    ['wait_cooldown']         = 'Debes esperar un poco antes de volver a usar esto.' 
 }
 
--- Función ESX para obtener traducción (Placeholder)
+-- Función ESX para obtener traducción
 if GetConvar('esx:use_custom_ui', 'false') ~= 'false' then
     function _U(key, ...)
         if Translations[key] ~= nil then
