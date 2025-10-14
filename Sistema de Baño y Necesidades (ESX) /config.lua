@@ -10,41 +10,39 @@ Config = {}
 -- Radio de detección (en metros) para interactuar con los objetos.
 Config.DrawDistance = 2.0
 
--- Tecla para interactuar (por defecto, 'E'). Se usa para el texto de ayuda.
-Config.InteractKey = 'E' 
+-- Tecla para interactuar (por defecto, 'E'). Ya no se usa para el texto de ayuda directo.
+Config.InteractKey = 38 -- Código de tecla 'E'
 
 -- Cooldown general (en segundos) para evitar spam de acciones.
--- Se aplicará por acción (ej. no puedes ducharte de nuevo hasta que pase este tiempo).
 Config.ActionCooldown = 180 -- 3 minutos
 
 -- Nivel de Limpieza inicial del jugador (0 = Sucio, 100 = Limpio)
-Config.InitialCleanliness = 80
+Config.InitialCleanliness = 80 
 
 -- [[ EFECTOS DE LAS ACCIONES ]] --------------------------------------
--- Valores que se aplicarán al personaje después de la acción.
 
 Config.Effects = {
     -- Efectos al usar el inodoro/orinal ('hacer necesidades')
     toilet = {
-        hunger_reduction = 10,  -- Reducción en el nivel de hambre (0-100)
-        thirst_reduction = 5,   -- Reducción en el nivel de sed (0-100)
-        cleanliness_gain = 5    -- Aumento leve en el nivel de limpieza 
+        hunger_reduction = 10,
+        thirst_reduction = 5,
+        cleanliness_gain = 5
     },
     -- Efectos al usar la ducha ('bañarse')
     shower = {
-        cleanliness_gain = 40,  -- Aumento significativo de limpieza
-        hunger_reduction = 0,   
-        thirst_reduction = 0    
+        cleanliness_gain = 40,
+        hunger_reduction = 0,
+        thirst_reduction = 0
     },
     -- Efectos al usar el lavabo ('lavarse las manos/cara')
     sink = {
-        cleanliness_gain = 10,  -- Aumento leve de limpieza
+        cleanliness_gain = 10,
         hunger_reduction = 0,
         thirst_reduction = 0
     }
 }
 
--- [[ ANIMACIONES, TIEMPOS Y SONIDOS ]] -----------------------------------------
+-- [[ ANIMACIONES, TIEMPOS, SONIDOS Y PARTÍCULAS (PTFX) ]] -----------------------------------------
 
 Config.Actions = {
     -- Inodoro (Sentarse)
@@ -53,8 +51,8 @@ Config.Actions = {
         duration = 8000, 
         text = 'Usar el Inodoro (Necesidades Mayores)',
         sound = {
-            name = 'FLUSH_WATER_SOUND',
-            set = 'MP_AIRCRAFT_MISC_SOUNDS'
+            startName = 'FLUSH_WATER_SOUND',
+            startSet = 'MP_AIRCRAFT_MISC_SOUNDS'
         }
     },
     -- Orinal (Solo hombres)
@@ -64,8 +62,8 @@ Config.Actions = {
         duration = 5000,
         text = 'Usar el Orinal (Necesidades Menores)',
         sound = {
-            name = 'FLUSH_WATER_SOUND',
-            set = 'MP_AIRCRAFT_MISC_SOUNDS'
+            startName = 'FLUSH_WATER_SOUND',
+            startSet = 'MP_AIRCRAFT_MISC_SOUNDS'
         }
     },
     -- Ducha
@@ -75,19 +73,33 @@ Config.Actions = {
         duration = 15000, 
         text = 'Ducharse y Aumentar Limpieza',
         sound = {
-            name = 'FM_CUT_MICHAEL_SHOWER_START',
-            set = 'MP_FM_CUTSCENES'
+            startName = 'FM_CUT_MICHAEL_SHOWER_START',
+            startSet = 'MP_FM_CUTSCENES',
+            stopName = 'WATER_SHUT_OFF',
+            stopSet = 'PI_PLANS_HEIST_PLANS_SOUNDSET'
+        },
+        ptfx = {
+            dict = 'core',
+            name = 'ent_amb_shower_steam',
+            offset = vector3(0.0, 0.0, 1.0) -- Ajustar si es necesario
         }
     },
     -- Lavabo
     sink = {
-        animDict = 'amb@world_human_leaning@male@wall@hand_up@idle_a',
-        animName = 'idle_a',
+        animDict = 'amb@prop_human_toilet@male@four@base', -- Mejor animación para lavarse las manos
+        animName = '4_wash_hands',
         duration = 6000,
         text = 'Lavarse las Manos/Cara',
         sound = {
-            name = 'WATER_TAP_ON',
-            set = 'PI_PLANS_HEIST_PLANS_SOUNDSET'
+            startName = 'WATER_TAP_ON',
+            startSet = 'PI_PLANS_HEIST_PLANS_SOUNDSET',
+            stopName = 'WATER_SHUT_OFF',
+            stopSet = 'PI_PLANS_HEIST_PLANS_SOUNDSET'
+        },
+        ptfx = {
+            dict = 'core',
+            name = 'ent_amb_sink_tap_water_drip',
+            offset = vector3(0.0, 0.0, 0.0)
         }
     }
 }
@@ -95,30 +107,34 @@ Config.Actions = {
 
 -- [[ UBICACIONES INTERACTIVAS ]] ---------------------------------------
 -- Lista de todas las zonas interactivas en el mapa.
-
+-- El objectModel es CRÍTICO para que el DrawText 3D funcione correctamente.
 Config.Locations = {
-    -- 1. Baño Público de Vespucci Beach
+    -- 1. Inodoro Público (Ejemplo de Objeto)
     {
         coords = vector3(-1261.21, -1438.30, 4.40), 
         heading = 24.0,                            
-        type = 'toilet'                            
+        type = 'toilet',
+        objectModel = GetHashKey('prop_toilet_01') -- Modelo de inodoro común (DEBE VERIFICARSE EN SU MAPA)
     },
+    -- 2. Orinal Público
     {
         coords = vector3(-1262.50, -1438.90, 4.40), 
         heading = 24.0,
-        type = 'urinal'
+        type = 'urinal',
+        objectModel = GetHashKey('prop_urinal_01') -- Modelo de orinal común
     },
-    -- 2. Apartamento de Michael (Ejemplo de Ducha)
+    -- 3. Ducha (Ejemplo de objeto "ducha" en un apartamento)
     {
         coords = vector3(-1147.20, -685.20, 35.70), 
         heading = 330.0,
-        type = 'shower'
+        type = 'shower',
+        objectModel = GetHashKey('prop_shower_01') -- O un modelo de bañera cercano
     },
-    -- 3. Gasolinera 24/7 (Ejemplo de Lavabo)
+    -- 4. Lavabo (Ejemplo de lavabo de gasolinera)
     {
         coords = vector3(264.80, -1004.80, -100.00), 
         heading = 30.0,
-        type = 'sink'
+        type = 'sink',
+        objectModel = GetHashKey('prop_sink_01') -- Modelo de lavabo
     },
-    -- ... (más ubicaciones)
 }
