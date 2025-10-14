@@ -1,45 +1,50 @@
 -- ================================================================= --
 --                             SERVER.LUA                            --
---         LÓGICA DEL LADO DEL SERVIDOR (Efectos y Limpieza)         --
+--         LÓGICA DEL LADO DEL SERVIDOR (Efectos y Limpieza Persistente) --
 -- ================================================================= --
 
 local ESX = nil
 local PlayerCooldowns = {} 
+local CLEANLINESS_KEY = 'cleanliness' -- Clave usada en la metadata del jugador
 
 -- [[ 1. INICIALIZACIÓN Y ESX ]] ----------------------------------------
 ESX = exports['es_extended']:getSharedObject()
 
 
--- [[ 2. SISTEMA DE LIMPIEZA BASE ]] ------------------------------------
+-- [[ 2. SISTEMA DE LIMPIEZA PERSISTENTE (Metadata) ]] --------------------
 
 -- Inicializa el estado de limpieza al conectarse
 AddEventHandler('esx:playerLoaded', function(source)
     local xPlayer = ESX.GetPlayerFromId(source)
     
-    -- Intentar obtener el dato de limpieza de la sesión o inicializarlo.
-    -- NOTA: Esto solo persiste la limpieza durante la sesión.
-    if xPlayer.getSessionData('cleanliness') == nil then
-        xPlayer.setSessionData('cleanliness', Config.InitialCleanliness)
+    -- Intenta obtener la limpieza de la metadata (DB), si no existe, la inicializa.
+    local currentCleanliness = xPlayer.getMetadata(CLEANLINESS_KEY)
+    
+    if currentCleanliness == nil then
+        xPlayer.setMetadata(CLEANLINESS_KEY, Config.InitialCleanliness)
+        currentCleanliness = Config.InitialCleanliness
     end
     
-    -- Puedes disparar un evento al cliente para mostrar el estado de limpieza si es necesario.
-    -- TriggerClientEvent('esx_bathroom:updateCleanliness', source, xPlayer.getSessionData('cleanliness'))
+    -- Opcional: Notificar al jugador su nivel inicial de limpieza
+    TriggerClientEvent('esx:showNotification', source, 'Tu nivel de limpieza actual es: ' .. math.floor(currentCleanliness) .. '%')
 end)
-
 
 -- Función para obtener la limpieza actual del jugador
 local function getCleanliness(xPlayer)
-    -- Intenta obtener de la sesión. Si no existe (raro), usa 0.
-    return xPlayer.getSessionData('cleanliness') or 0
+    -- Si la metadata no existe por alguna razón, devuelve el valor inicial.
+    return xPlayer.getMetadata(CLEANLINESS_KEY) or Config.InitialCleanliness
 end
 
--- Función para actualizar la limpieza del jugador
+-- Función para actualizar la limpieza del jugador y guardarla
 local function setCleanliness(xPlayer, amount)
     local newCleanliness = math.min(100, math.max(0, amount)) -- Limitar entre 0 y 100
-    xPlayer.setSessionData('cleanliness', newCleanliness)
     
-    -- Notificar al cliente (ejemplo: para una NUI o efecto visual)
-    -- TriggerClientEvent('esx_bathroom:updateCleanliness', xPlayer.source, newCleanliness)
+    xPlayer.setMetadata(CLEANLINESS_KEY, newCleanliness)
+    
+    -- Es crucial forzar el guardado si se usa un sistema de guardado asíncrono.
+    -- La función SavePlayer se usa en bases ESX antiguas o para forzar el guardado.
+    -- ESX.SavePlayer(xPlayer) 
+
     return newCleanliness
 end
 
@@ -65,7 +70,7 @@ AddEventHandler('esx_bathroom:finishAction', function(actionType)
     -- === 3.2. APLICACIÓN DE EFECTOS ===
     if effects and xPlayer then
         
-        -- 1. Reducción de Hambre
+        -- 1. Reducción de Hambre/Sed
         if effects.hunger_reduction > 0 then
             local currentHunger = xPlayer.getHunger()
             local newHunger = math.max(0, currentHunger - effects.hunger_reduction)
@@ -73,7 +78,6 @@ AddEventHandler('esx_bathroom:finishAction', function(actionType)
             TriggerClientEvent('esx:showNotification', source, 'Sientes un alivio. Hambre reducida.')
         end
 
-        -- 2. Reducción de Sed
         if effects.thirst_reduction > 0 then
             local currentThirst = xPlayer.getThirst()
             local newThirst = math.max(0, currentThirst - effects.thirst_reduction)
@@ -81,19 +85,18 @@ AddEventHandler('esx_bathroom:finishAction', function(actionType)
             TriggerClientEvent('esx:showNotification', source, 'Sientes menos sed.')
         end
 
-        -- 3. Ganancia de Limpieza
+        -- 2. Ganancia de Limpieza
         if effects.cleanliness_gain > 0 then
             local currentCleanliness = getCleanliness(xPlayer)
             local newCleanliness = setCleanliness(xPlayer, currentCleanliness + effects.cleanliness_gain)
             
-            TriggerClientEvent('esx:showNotification', source, '¡Te sientes mucho más limpio! (Limpieza: ' .. newCleanliness .. '%)')
+            TriggerClientEvent('esx:showNotification', source, '¡Te sientes mucho más limpio! (Limpieza: ' .. math.floor(newCleanliness) .. '%)')
         end
 
         -- === 3.3. ESTABLECER COOLDOWN ===
         cooldowns[actionType] = now + cooldownTime
         PlayerCooldowns[source] = cooldowns
         
-        -- ENVIAR EL COOLDOWN AL CLIENTE para la UX
         TriggerClientEvent('esx_bathroom:setCooldownClient', source, actionType, cooldowns[actionType])
     end
 end)
