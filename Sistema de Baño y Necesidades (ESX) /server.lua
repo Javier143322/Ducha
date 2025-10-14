@@ -25,7 +25,7 @@ AddEventHandler('esx_bathroom:finishAction', function(actionType)
     if cooldowns[actionType] and now < cooldowns[actionType] then
         -- Jugador en cooldown, no aplicar efectos.
         local remaining = math.ceil((cooldowns[actionType] - now) / 1000)
-        TriggerClientEvent('esx:showNotification', source, 'Debes esperar ' .. remaining .. ' segundos antes de volver a usar ' .. actionType .. '.')
+        TriggerClientEvent('esx:showNotification', source, 'Debes esperar ' .. remaining .. ' segundos antes de volver a usar ' .. Config.Actions[actionType].text .. '.')
         return
     end
 
@@ -48,21 +48,19 @@ AddEventHandler('esx_bathroom:finishAction', function(actionType)
         end
 
         -- 3. Ganancia de Limpieza (Implementación Base)
-        -- NOTA: ESX no tiene un estado de "limpieza" por defecto.
-        -- Para esta implementación, utilizaremos un elemento ESX temporal o
-        -- una variable de datos del jugador, si tu ESX lo permite.
-        -- Por simplicidad, aquí solo notificaremos, pero se usaría una función de "setCleanliness".
         if effects.cleanliness_gain > 0 then
-            -- ** ESTO REQUIERE UNA FUNCIÓN CUSTOM EN TU BASE ESX **
-            -- Ejemplo hipotético: xPlayer.setCleanliness(xPlayer.getCleanliness() + effects.cleanliness_gain)
+            -- Para una implementación real, aquí iría la función de tu base:
+            -- xPlayer.setCleanliness(xPlayer.getCleanliness() + effects.cleanliness_gain)
             
-            -- Por ahora, solo notificamos
             TriggerClientEvent('esx:showNotification', source, '¡Te sientes mucho más limpio!')
         end
 
         -- === 2.3. ESTABLECER COOLDOWN ===
         cooldowns[actionType] = now + cooldownTime
         PlayerCooldowns[source] = cooldowns
+        
+        -- ENVIAR EL COOLDOWN AL CLIENTE para la UX
+        TriggerClientEvent('esx_bathroom:setCooldownClient', source, actionType, cooldowns[actionType])
     end
 end)
 
