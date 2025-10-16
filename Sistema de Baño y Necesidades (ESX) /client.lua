@@ -1,6 +1,6 @@
 -- ================================================================= --
---                             CLIENT.LUA                            --
---         LÓGICA DEL LADO DEL CLIENTE (Detección, Animaciones, Sonidos, PTFX) --
+--                        CLIENT.LUA MEJORADO                      --
+--         SISTEMA AVANZADO DE HIGIENE Y NECESIDADES              --
 -- ================================================================= --
 
 local ESX = nil
@@ -8,32 +8,16 @@ local PlayerData = {}
 local isNearObject = false 
 local currentZone = nil     
 local ActionTimestamps = {} 
-local isActionInProgress = false -- Bloqueo de acciones
-local ptfxHandle = 0             -- Handle para la partícula de PTFX
+local isActionInProgress = false
+local ptfxHandle = 0
+local needsUpdateTimer = 0
+local playerNeeds = {
+    bladder = 0,    -- Vejiga (0-100)
+    bowel = 0,      -- Intestinos (0-100)
+    lastUpdate = GetGameTimer()
+}
 
--- [[ FUNCIONES DE DIBUJO 3D ]] -----------------------------------------
-
-function DrawText3D(x, y, z, text)
-    local onScreen, _x, _y = World3dToScreen2d(x, y, z)
-    local dist = GetDistanceBetweenCoords(GetGameplayCamCoords(), x, y, z, 1)
-    local scale = 1 / dist * 2
-    local fov = (1 / GetGameplayCamFov()) * 10
-    local scale = scale * fov
-    
-    if onScreen then
-        SetTextScale(0.0, scale)
-        SetTextFont(4)
-        SetTextProportional(1)
-        SetTextColour(255, 255, 255, 255)
-        SetTextOutline()
-        SetTextEntry("STRING")
-        SetTextCentre(1)
-        AddTextComponentString(text)
-        DrawText(_x, _y)
-    end
-end
-
--- [[ 1. INICIALIZACIÓN Y ESX ]] ----------------------------------------
+-- [[ INICIALIZACIÓN MEJORADA ]] -------------------------------------
 Citizen.CreateThread(function()
     while ESX == nil do
         TriggerEvent('esx:getSharedObject', function(obj) ESX = obj end)
@@ -44,47 +28,115 @@ Citizen.CreateThread(function()
         Citizen.Wait(10)
         PlayerData = ESX.GetPlayerData()
     end
+    
+    -- Iniciar sistema de necesidades
+    StartNeedsSystem()
+    print('[ESX_BATHROOM] Cliente mejorado inicializado - Sistema de necesidades activo')
 end)
 
+-- [[ SISTEMA DE NECESIDADES FISIOLÓGICAS ]] ------------------------
+function StartNeedsSystem()
+    Citizen.CreateThread(function()
+        while true do
+            local currentTime = GetGameTimer()
+            
+            -- Actualizar necesidades cada 30 segundos
+            if currentTime - needsUpdateTimer >= Config.NeedsSystem.updateInterval then
+                UpdatePlayerNeeds()
+                needsUpdateTimer = currentTime
+            end
+            
+            -- Verificar efectos de necesidades urgentes
+            CheckNeedsEffects()
+            
+            Citizen.Wait(5000) -- Revisar cada 5 segundos
+        end
+    end)
+end
 
--- [[ 2. BUCLE DE DETECCIÓN Y DIBUJO 3D ]] ----------------------------------
+function UpdatePlayerNeeds()
+    if not Config.NeedsSystem.enabled then return end
+    
+    -- Aumentar necesidades naturales
+    playerNeeds.bladder = math.min(100, playerNeeds.bladder + Config.NeedsSystem.bladderIncrease)
+    playerNeeds.bowel = math.min(100, playerNeeds.bowel + Config.NeedsSystem.bowelIncrease)
+    playerNeeds.lastUpdate = GetGameTimer()
+    
+    -- Debug
+    if Config.Debug then
+        print(string.format('[NECESIDADES] Vejiga: %d%%, Intestinos: %d%%', playerNeeds.bladder, playerNeeds.bowel))
+    end
+end
+
+function CheckNeedsEffects()
+    -- Verificar efectos de vejiga
+    for threshold, effect in pairs(Config.NeedsSystem.effects.bladder) do
+        if playerNeeds.bladder >= threshold then
+            ESX.ShowNotification(effect.message)
+            -- Aquí podrías agregar efectos de estrés al ESX status
+            break
+        end
+    end
+    
+    -- Verificar efectos de intestinos
+    for threshold, effect in pairs(Config.NeedsSystem.effects.bowel) do
+        if playerNeeds.bowel >= threshold then
+            ESX.ShowNotification(effect.message)
+            break
+        end
+    end
+end
+
+function ResetNeeds(needType)
+    if needType == 'bladder' or needType == 'both' then
+        playerNeeds.bladder = 0
+    end
+    if needType == 'bowel' or needType == 'both' then
+        playerNeeds.bowel = 0
+    end
+end
+
+-- [[ SISTEMA DE DETECCIÓN OPTIMIZADO ]] ----------------------------
 Citizen.CreateThread(function()
     while true do
-        Citizen.Wait(0) 
-
+        local waitTime = 500
         local playerPed = PlayerPedId()
         local playerCoords = GetEntityCoords(playerPed)
-        local closestDist = Config.DrawDistance + 1.0 
+        
         local closestZone = nil
+        local closestDist = Config.DrawDistance + 1.0
 
-        for i=1, #Config.Locations, 1 do
-            local v = Config.Locations[i]
-            local dist = #(playerCoords - v.coords)
-
-            if dist < closestDist and dist <= Config.DrawDistance then
+        -- Buscar zona más cercana
+        for i = 1, #Config.Locations do
+            local zone = Config.Locations[i]
+            local dist = #(playerCoords - zone.coords)
+            
+            if dist < closestDist then
                 closestDist = dist
-                closestZone = v
+                closestZone = zone
             end
         end
 
-        if closestZone ~= nil and not isActionInProgress then
+        -- Mostrar interfaz si está cerca y no hay acción en progreso
+        if closestZone and closestDist <= Config.DrawDistance and not isActionInProgress then
+            waitTime = 5
             local actionConfig = Config.Actions[closestZone.type]
             
-            -- DIBUJAR TEXTO 3D
-            DrawText3D(closestZone.coords.x, closestZone.coords.y, closestZone.coords.z + 1.0, 
-                string.format("~b~[%s]~w~ %s", GetKeyName(Config.InteractKey), actionConfig.text))
-
+            -- Dibujar texto 3D mejorado
+            DrawText3DImproved(closestZone.coords, actionConfig.text)
+            
             if not isNearObject then
                 isNearObject = true
                 currentZone = closestZone
             end
 
-            -- Manejar la interacción (Tecla 'E')
-            if IsControlJustReleased(0, Config.InteractKey) and not IsPedInAnyVehicle(playerPed, false) and not ESX.UI.Menu.IsOpen('default', GetCurrentResourceName(), 'bathroom_interaction_menu') then 
+            -- Manejar interacción
+            if IsControlJustReleased(0, Config.InteractKey) and not IsPedInAnyVehicle(playerPed, false) then
                 if not IsActionOnCooldown(currentZone.type) then
-                    TriggerEvent('esx_bathroom:openMenu', currentZone)
+                    OpenInteractionMenu(currentZone)
                 else
-                    ESX.ShowNotification(_U('wait_cooldown'))
+                    local remaining = GetCooldownRemaining(currentZone.type)
+                    ESX.ShowNotification('⏰ Espera ' .. remaining .. ' segundos')
                 end
             end
         else
@@ -92,79 +144,133 @@ Citizen.CreateThread(function()
                 isNearObject = false
                 currentZone = nil
             end
-            Citizen.Wait(500)
         end
+
+        Citizen.Wait(waitTime)
     end
 end)
 
-
--- [[ 3. LÓGICA DE MENÚ ]] -------------------------------------
-
-RegisterNetEvent('esx_bathroom:openMenu')
-AddEventHandler('esx_bathroom:openMenu', function(zoneData)
+-- [[ TEXTO 3D MEJORADO ]] ------------------------------------------
+function DrawText3DImproved(coords, text)
+    local onScreen, screenX, screenY = World3dToScreen2d(coords.x, coords.y, coords.z + 1.0)
     
+    if onScreen then
+        local dist = GetDistanceBetweenCoords(GetGameplayCamCoords(), coords.x, coords.y, coords.z, true)
+        local scale = (1 / dist) * 2
+        local fov = (1 / GetGameplayCamFov()) * 100
+        scale = scale * fov
+        
+        SetTextScale(0.0, 0.35 * scale)
+        SetTextFont(4)
+        SetTextProportional(1)
+        SetTextColour(255, 255, 255, 255)
+        SetTextDropshadow(0, 0, 0, 0, 255)
+        SetTextEdge(2, 0, 0, 0, 150)
+        SetTextDropShadow()
+        SetTextOutline()
+        SetTextEntry("STRING")
+        SetTextCentre(1)
+        AddTextComponentString(text)
+        DrawText(screenX, screenY)
+        
+        -- Dibujar instrucción de tecla
+        local keyText = "Presiona ~b~[E]~w~ para interactuar"
+        SetTextScale(0.0, 0.25 * scale)
+        SetTextEntry("STRING")
+        SetTextCentre(1)
+        AddTextComponentString(keyText)
+        DrawText(screenX, screenY + 0.02)
+    end
+end
+
+-- [[ MENÚ DE INTERACCIÓN MEJORADO ]] --------------------------------
+function OpenInteractionMenu(zoneData)
     local elements = {}
     local actionConfig = Config.Actions[zoneData.type]
+    
+    -- Información de necesidades actuales
+    if Config.NeedsSystem.enabled then
+        table.insert(elements, {
+            label = '💧 Vejiga: ' .. playerNeeds.bladder .. '% | 💩 Intestinos: ' .. playerNeeds.bowel .. '%',
+            value = 'info',
+            disabled = true
+        })
+        table.insert(elements, {label = '─', value = 'separator', disabled = true})
+    end
 
+    -- Acción principal
     table.insert(elements, {
-        label = actionConfig.text, 
-        value = zoneData.type      
+        label = actionConfig.text,
+        value = zoneData.type,
+        desc = GetActionDescription(zoneData.type)
     })
 
     ESX.UI.Menu.CloseAll()
 
-    ESX.UI.Menu.Open(
-        'default', GetCurrentResourceName(), 'bathroom_interaction_menu',
+    ESX.UI.Menu.Open('default', GetCurrentResourceName(), 'bathroom_interaction_menu',
         {
-            title    = string.upper(zoneData.type),
+            title    = '🚽 Sistema de Higiene',
+            align    = 'right',
             elements = elements,
         },
         function(data, menu)
-            menu.close()
-            TriggerEvent('esx_bathroom:startAction', data.current.value, zoneData.coords, zoneData.heading)
+            if data.current.value ~= 'info' and data.current.value ~= 'separator' then
+                menu.close()
+                StartActionSequence(data.current.value, zoneData)
+            end
         end,
         function(data, menu)
             menu.close()
         end
     )
-end)
+end
 
+function GetActionDescription(actionType)
+    local effects = Config.Effects[actionType]
+    local desc = ""
+    
+    if effects.cleanliness_gain > 0 then
+        desc = desc .. "🛁 +" .. effects.cleanliness_gain .. "% Limpieza\n"
+    end
+    if effects.bladder_relief then
+        desc = desc .. "💧 Alivio de vejiga\n"
+    end
+    if effects.bowel_relief then
+        desc = desc .. "💩 Alivio intestinal\n"
+    end
+    if effects.stress_relief > 0 then
+        desc = desc .. "😌 -" .. effects.stress_relief .. "% Estrés\n"
+    end
+    
+    return desc
+end
 
--- [[ 4. LÓGICA DE LA ACCIÓN (Animaciones, Sonidos y PTFX) ]] ----------------------------
-
-RegisterNetEvent('esx_bathroom:startAction')
-AddEventHandler('esx_bathroom:startAction', function(actionType, coords, heading)
+-- [[ SECUENCIA DE ACCIÓN MEJORADA ]] --------------------------------
+function StartActionSequence(actionType, zoneData)
     local actionConfig = Config.Actions[actionType]
     local playerPed = PlayerPedId()
     
     isActionInProgress = true
 
-    -- Congelar/Bloquear al jugador y posicionar
-    SetEntityCoords(playerPed, coords.x, coords.y, coords.z)
-    SetEntityHeading(playerPed, heading)
+    -- Congelar y posicionar jugador
+    SetEntityCoords(playerPed, zoneData.coords.x, zoneData.coords.y, zoneData.coords.z)
+    SetEntityHeading(playerPed, zoneData.heading)
     FreezeEntityPosition(playerPed, true)
     
-    -- Iniciar Sonido
+    -- Notificación de inicio
+    ESX.ShowNotification('🔄 ' .. actionConfig.text .. '...')
+
+    -- Sonido de inicio
     if actionConfig.sound and actionConfig.sound.startName then
         PlaySoundFrontend(-1, actionConfig.sound.startName, actionConfig.sound.startSet, true)
     end
     
-    -- Iniciar Partícula (PTFX)
+    -- Efectos de partículas
     if actionConfig.ptfx then
-        ESX.Streaming.RequestPtfxAsset(actionConfig.ptfx.dict, function()
-            local boneIndex = GetEntityBoneIndexByName(playerPed, 'skel_head') -- Se puede usar un hueso o la posición
-            ptfxHandle = StartParticleFxLoopedAtCoord(
-                actionConfig.ptfx.name, 
-                coords.x + actionConfig.ptfx.offset.x, 
-                coords.y + actionConfig.ptfx.offset.y, 
-                coords.z + actionConfig.ptfx.offset.z, 
-                0.0, 0.0, 0.0, 
-                1.0, false, false, false, false
-            )
-        end)
+        StartParticleEffect(actionConfig.ptfx, zoneData.coords)
     end
 
-    -- Lógica de las Animaciones
+    -- Animación o escenario
     if actionConfig.scenario then
         TaskStartScenarioInPlace(playerPed, actionConfig.scenario, 0, true)
     elseif actionConfig.animDict and actionConfig.animName then
@@ -173,70 +279,144 @@ AddEventHandler('esx_bathroom:startAction', function(actionType, coords, heading
         end)
     end
     
-    -- Esperar la duración de la acción
+    -- Barra de progreso visual
+    ShowProgressBar(actionConfig.text, actionConfig.duration)
+
+    -- Esperar duración de la acción
     Citizen.Wait(actionConfig.duration)
 
-    -- Detener Partícula (PTFX)
+    -- Limpieza final
+    CleanupAction(actionConfig)
+    
+    -- Enviar al servidor
+    TriggerServerEvent('esx_bathroom:finishAction', actionType)
+    
+    isActionInProgress = false
+    
+    -- Resetear necesidades locales
+    if actionType == 'toilet' then
+        ResetNeeds('both')
+    elseif actionType == 'urinal' then
+        ResetNeeds('bladder')
+    end
+end
+
+-- [[ EFECTOS DE PARTÍCULAS MEJORADOS ]] ----------------------------
+function StartParticleEffect(ptfxConfig, coords)
+    ESX.Streaming.RequestPtfxAsset(ptfxConfig.dict, function()
+        UseParticleFxAssetNextCall(ptfxConfig.dict)
+        
+        ptfxHandle = StartParticleFxLoopedAtCoord(
+            ptfxConfig.name,
+            coords.x + ptfxConfig.offset.x,
+            coords.y + ptfxConfig.offset.y, 
+            coords.z + ptfxConfig.offset.z,
+            0.0, 0.0, 0.0,
+            ptfxConfig.scale or 1.0,
+            false, false, false, false
+        )
+        
+        SetParticleFxLoopedColour(ptfxHandle, 1.0, 1.0, 1.0, 0)
+    end)
+end
+
+-- [[ BARRA DE PROGRESO VISUAL ]] -----------------------------------
+function ShowProgressBar(text, duration)
+    Citizen.CreateThread(function()
+        local startTime = GetGameTimer()
+        local endTime = startTime + duration
+        
+        while GetGameTimer() < endTime do
+            local currentTime = GetGameTimer()
+            local progress = (currentTime - startTime) / duration
+            local percent = math.floor(progress * 100)
+            
+            ESX.UI.Menu.CloseAll()
+            
+            -- Dibujar texto de progreso
+            SetTextComponentFormat('STRING')
+            AddTextComponentString('🔄 ' .. text .. ' (' .. percent .. '%)')
+            DisplayHelpTextFromStringLabel(0, 0, 1, -1)
+            
+            Citizen.Wait(0)
+        end
+    end)
+end
+
+-- [[ LIMPIEZA DE ACCIÓN ]] -----------------------------------------
+function CleanupAction(actionConfig)
+    local playerPed = PlayerPedId()
+    
+    -- Detener partículas
     if ptfxHandle ~= 0 then
-        StopParticleFxLooped(ptfxHandle, 0)
+        StopParticleFxLooped(ptfxHandle, false)
         ptfxHandle = 0
     end
     
-    -- Detener Sonido de Cierre
+    -- Sonido de finalización
     if actionConfig.sound and actionConfig.sound.stopName then
         PlaySoundFrontend(-1, actionConfig.sound.stopName, actionConfig.sound.stopSet, true)
     end
     
-    -- Finalizar la animación/escenario y descongelar
+    -- Limpiar animaciones
     ClearPedTasksImmediately(playerPed)
     FreezeEntityPosition(playerPed, false)
-
-    isActionInProgress = false
     
-    -- Disparar los efectos al servidor.
-    TriggerServerEvent('esx_bathroom:finishAction', actionType)
-end)
+    -- Limpiar UI
+    ESX.UI.Menu.CloseAll()
+end
 
+-- [[ SISTEMA DE COOLDOWNS MEJORADO ]] ------------------------------
+function IsActionOnCooldown(actionType)
+    local endTimestamp = ActionTimestamps[actionType]
+    if endTimestamp then
+        return GetGameTimer() < endTimestamp
+    end
+    return false
+end
 
--- [[ 5. GESTIÓN DE COOLDOWNS (Lado Cliente) ]] --------------------------
+function GetCooldownRemaining(actionType)
+    local endTimestamp = ActionTimestamps[actionType]
+    if endTimestamp then
+        local remaining = math.ceil((endTimestamp - GetGameTimer()) / 1000)
+        return remaining
+    end
+    return 0
+end
 
 RegisterNetEvent('esx_bathroom:setCooldownClient')
 AddEventHandler('esx_bathroom:setCooldownClient', function(actionType, cooldownEndTimestamp)
     ActionTimestamps[actionType] = cooldownEndTimestamp
 end)
 
-function IsActionOnCooldown(actionType)
-    local endTimestamp = ActionTimestamps[actionType]
-    if endTimestamp then
-        local now = GetGameTimer()
-        return now < endTimestamp
-    end
-    return false
+-- [[ COMANDOS DE DEBUG ]] ------------------------------------------
+if Config.Debug then
+    RegisterCommand('bathroom_debug', function()
+        print('=== BATHROOM DEBUG ===')
+        print('Necesidades - Vejiga: ' .. playerNeeds.bladder .. '%, Intestinos: ' .. playerNeeds.bowel .. '%')
+        print('Cercano a objeto: ' .. tostring(isNearObject))
+        print('Acción en progreso: ' .. tostring(isActionInProgress))
+        print('Cooldowns activos: ' .. json.encode(ActionTimestamps))
+        print('======================')
+    end, false)
 end
 
+-- [[ EVENTOS DE LIMPIEZA ]] ----------------------------------------
 AddEventHandler('onResourceStop', function(resourceName)
     if resourceName == GetCurrentResourceName() then
+        -- Limpiar partículas
+        if ptfxHandle ~= 0 then
+            StopParticleFxLooped(ptfxHandle, false)
+        end
+        
+        -- Limpiar estado
         ActionTimestamps = {}
+        isActionInProgress = false
+        
+        -- Limpiar animaciones
+        ClearPedTasksImmediately(PlayerPedId())
+        FreezeEntityPosition(PlayerPedId(), false)
     end
 end)
 
-
--- [[ 6. LOCALIZACIÓN/TEXTOS ]] ------------------------------------------
--- Función GetKeyName para obtener el nombre legible de la tecla (para DrawText3D)
-function GetKeyName(control)
-    return GetControlInstructionalButton(2, control, true)
-end
-
-local Translations = {
-    ['wait_cooldown']         = 'Debes esperar un poco antes de volver a usar esto.' 
-}
-
-if GetConvar('esx:use_custom_ui', 'false') ~= 'false' then
-    function _U(key, ...)
-        if Translations[key] ~= nil then
-            return Translations[key]:format(...)
-        else
-            return 'TEXT_NOT_FOUND'
-        end
-    end
-end
+print('[ESX_BATHROOM] Cliente mejorado completamente cargado')
